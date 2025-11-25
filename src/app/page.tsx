@@ -1,106 +1,106 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from "react";
-import { Host } from "@/types/network";
-import Header from "@/components/Header";
-import ScanSection from "@/components/ScanSection";
-import ErrorMessage from "@/components/ErrorMessage";
-import ResultsSection from "@/components/ResultsSection";
-import BackgroundEffects from "@/components/BackgroundEffects";
+import { useState } from 'react';
+import { MainLayout, Header } from '@/components/layout';
+import { StatsCards, RecentActivity, SecurityOverview } from '@/components/dashboard';
+import { SecurityPieChart, ProtocolsChart, ServicesChart } from '@/components/charts';
+import { HostList } from '@/components/hosts';
+import { LoadingOverlay } from '@/components/common';
+import { useHosts, useHostSearch } from '@/hooks/useHosts';
+import { useStats, useRecentActivity } from '@/hooks/useStats';
+import { calculateSecurityStats, calculateProtocolStats, calculateServiceStats } from '@/utils/security';
+import { getPortSecurityLevel } from '@/constants/ports';
 
-export default function Home() {
-  const [hosts, setHosts] = useState<Host[]>([]);
-  const [filteredHosts, setFilteredHosts] = useState<Host[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [scanning, setScanning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export default function Dashboard() {
+  const { hosts, loading: hostsLoading, refetch: refetchHosts } = useHosts();
+  const { stats, refetch: refetchStats } = useStats();
+  const { activity, refetch: refetchActivity } = useRecentActivity(24);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const fetchHosts = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await fetch("http://localhost:3000/api/hosts");
+  const filteredHosts = useHostSearch(hosts, searchQuery);
+  const securityStats = calculateSecurityStats(hosts);
+  const protocolStats = calculateProtocolStats(hosts);
+  const serviceStats = calculateServiceStats(hosts);
 
-      if (!response.ok) {
-        throw new Error("Error al obtener los hosts");
-      }
+  // Calcular alertas de seguridad
+  const securityIssues = hosts.reduce((acc, host) => {
+    return acc + host.puertos.filter(p => 
+      getPortSecurityLevel(p.numero_puerto) === 'insecure'
+    ).length;
+  }, 0);
 
-      const data = await response.json();
-      setHosts(data.hosts || []);
-      setFilteredHosts(data.hosts || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error desconocido");
-      console.error("Error fetching hosts:", err);
-    } finally {
-      setLoading(false);
-    }
+  const handleRefresh = () => {
+    refetchHosts();
+    refetchStats();
+    refetchActivity();
   };
 
-  const handleScan = async () => {
-    try {
-      setScanning(true);
-      setError(null);
-      const response = await fetch("http://localhost:3000/api/scan", {
-        method: "POST",
-      });
-
-      if (!response.ok) {
-        throw new Error("Error al escanear la red");
-      }
-
-      setTimeout(() => {
-        fetchHosts();
-        setScanning(false);
-      }, 1000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error desconocido");
-      setScanning(false);
-      console.error("Error scanning:", err);
-    }
-  };
-
-  useEffect(() => {
-    fetchHosts();
-  }, []);
-
-  useEffect(() => {
-    if (searchQuery.trim() === "") {
-      setFilteredHosts(hosts);
-    } else {
-      const filtered = hosts.filter((host) =>
-        host.ip_address.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      setFilteredHosts(filtered);
-    }
-  }, [searchQuery, hosts]);
+  if (hostsLoading && hosts.length === 0) {
+    return (
+      <MainLayout>
+        <div className="h-screen flex items-center justify-center">
+          <LoadingOverlay message="Cargando dashboard..." />
+        </div>
+      </MainLayout>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-neutral-900 via-black to-neutral-900 text-white flex flex-col relative overflow-hidden">
-      <BackgroundEffects />
-
-      <main className="flex-1 w-full flex flex-col items-center justify-start px-6 py-8 relative z-10">
-        <div className="w-full max-w-7xl mx-auto flex flex-col items-center space-y-12">
-          <Header />
-          
-          <ScanSection
+    <MainLayout>
+      <Header
+        title="Dashboard"
+        subtitle="Monitoreo de red en tiempo real"
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
-            onScan={handleScan}
-            onRefresh={fetchHosts}
-            scanning={scanning}
-            loading={loading}
+        onRefresh={handleRefresh}
+      />
+
+      <div className="p-6 space-y-6">
+        {/* Stats Cards */}
+        <StatsCards
+          totalHosts={stats?.total_equipos || hosts.length}
+          activeHosts={stats?.equipos_activos || hosts.filter(h => h.estado === 'activo').length}
+          totalPorts={stats?.total_registros_puertos || hosts.reduce((acc, h) => acc + h.puertos.length, 0)}
+          securityIssues={securityIssues}
+        />
+
+        {/* Charts Row */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <SecurityPieChart
+            data={securityStats}
+            title="Distribución de Seguridad"
           />
-
-          {error && <ErrorMessage message={error} />}
-
-          <ResultsSection 
-            hosts={filteredHosts} 
-            loading={loading} 
-            searchQuery={searchQuery} 
+          <ProtocolsChart
+            data={protocolStats}
+            title="Protocolos Utilizados"
+          />
+          <SecurityOverview
+            stats={securityStats}
+            totalPorts={hosts.reduce((acc, h) => acc + h.puertos.length, 0)}
           />
         </div>
-      </main>
+
+        {/* Activity and Services */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <RecentActivity activity={activity} />
+          <ServicesChart
+            data={serviceStats}
+            title="Servicios Detectados"
+          />
+        </div>
+
+        {/* Hosts List */}
+        <div>
+          <h2 className="text-lg font-semibold text-neutral-200 mb-4">
+            Dispositivos Recientes
+          </h2>
+          <HostList
+            hosts={filteredHosts.slice(0, 4)}
+            loading={hostsLoading}
+            emptyMessage="No se han detectado dispositivos. Inicia un escaneo."
+          />
+        </div>
     </div>
+    </MainLayout>
   );
 }
